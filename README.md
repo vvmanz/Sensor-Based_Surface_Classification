@@ -1,86 +1,104 @@
-# lb2_kurenko — Sensor-Based Surface Classification
+# Sensor-Based_Surface_Classification
 
-**PyTorch binary classification of surface type from robot sensor measurements, with Optuna tuning and architecture/data-ablation studies.**
+**Predicting the average rating of an anime from its genres, type, number of episodes and popularity: five regression models compared on a multi-gigabyte table, with DVC for the data and the training stage.**
 
 English | [Русский](README.ru.md)
 
-This experimental machine-learning project investigates whether a neural network can distinguish a selected surface category from sensor measurements. The target is built from the dataset's `Type` column: **class 1 = `Type == 2`**, **class 0 = other types**. The repository includes training/testing scripts, saved model and scaler files, original Excel tables and plots comparing design choices.
+![CatBoost feature importances](docs/catboost_importance.png)
 
-![Activation function study](activation_analysis.png)
+A study project on tabular regression and data versioning. User ratings (`rating.csv`) are joined with the anime
+catalogue (`anime.csv`: `anime_id, name, genre, type, episodes, rating, members`), genres are one-hot encoded, the title
+length is added as a feature, and the target is the average rating of the title (`rating_y`). Linear regression, a
+decision tree, CatBoost, XGBoost and an MLP are tuned with Optuna, saved as `.pkl` files and compared on the same table
+by MSE, MAE and R². The big table and the CatBoost training stage are tracked with DVC, so a model can be reproduced
+from a commit.
 
 ## Features
 
-- **Binary PyTorch classifier** using a multilayer perceptron (`nn.Linear`, activations and dropout).
-- **15 sensor features:** current (`I1`–`I3`), gyroscope (`gx`–`gz`), accelerometer (`ax`–`az`), voltages (`V1real`–`V3real`) and `N1`–`N3`.
-- **Optuna optimization** of layer size/count, learning rate, batch size, dropout and activation.
-- **Class imbalance handling** with class-weighted cross-entropy; separate imbalance/balancing experiments.
-- **Model inspection:** F1, accuracy, confusion matrix, classification report and ROC/AUC in `testing.py`.
-- **Ablation studies** on activations, epochs, optimizers, number of layers/neurons, random state, balancing and input normalization.
+* **Feature pipeline** (`ML.py`): merge of ratings and catalogue, multi-label one-hot encoding of genres
+  (`MultiLabelBinarizer`), dummies for the title type, number of words in the title, `episodes` and `members`.
+* **Five models**, each in its own script with an Optuna search: `linear_regression.py`, `tree.py`
+  (50 trials, depth 3–6), `catboost_learning.py`, `xgboost_learning.py`, `neural_network.py` (`MLPRegressor` with a
+  searched architecture).
+* **Side-by-side comparison** (`final_comparison.py`): loads the five saved models, prints MSE / MAE / R², draws
+  predicted-vs-true plots, linear weights, the first nodes of the tree and feature importances.
+* **Explainability artefacts**: `catboost_feature_importance.csv`, `xgboost_feature_importance.png`,
+  `linear_regression_results.txt` (weights per feature), MLP weight and bias plots per layer.
+* **DVC**: a `train_tree` stage in `dvc.yaml` (the CatBoost run: `df.csv` + `catboost_learning.py` → `catboost_optuna.pkl`)
+  with a lock file, and `df_final_for_lr_cleaned.csv.dvc` for the ~3.8 GB cleaned table.
+
+In the CatBoost model the strongest features are `members` and `episodes` (importance ≈ 41 and ≈ 15), then single
+genres (Drama, Ecchi, Shounen) and the TV type; the figure above is drawn from `catboost_feature_importance.csv`.
+The other plots (predicted vs true, error histogram, linear weights, MLP layers) are produced by `final_comparison.py`
+and the training scripts and are kept in the repository root.
 
 ## Requirements
 
-Python 3.10+ recommended, with `torch`, `numpy`, `pandas`, `scikit-learn`, `matplotlib`, `optuna`, `joblib`, `openpyxl` and `imbalanced-learn` (imported by the training experiments).
+* Python ≥ 3.10;
+* pandas, numpy, scikit-learn, CatBoost, XGBoost, Optuna, joblib, matplotlib, seaborn;
+* [DVC](https://dvc.org) if you want to pull or reproduce the tracked data and stage;
+* the raw tables: `anime.csv` is in the repository, `rating.csv` (user ratings of the same public anime dataset) is not,
+  and neither are the derived `df*.csv` files (hundreds of MB to several GB).
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install torch numpy pandas scikit-learn matplotlib optuna joblib openpyxl imbalanced-learn
+pip install pandas numpy scikit-learn catboost xgboost optuna joblib matplotlib seaborn "dvc"
 ```
 
-## Data
-
-| Input / artifact | Description |
-|---|---|
-| `raw/train.xlsx`, `raw/test.xlsx` | Original tabular train/test sets |
-| `train_augmented.xlsx` | Prepared dataset used by `main.py` |
-| `train_imbalanced.xlsx`, `train_unnormalized.xlsx`, `train_unsorted.xlsx` | Experiment-specific variants |
-| `scaler_v1_features.pkl` | Saved feature scaler loaded by `testing.py` |
-| `model.pt` | Saved neural-network checkpoint |
-
-`main.py` directly loads `train_augmented.xlsx`. The preprocessing work is also recorded in `preparation_dataset.ipynb`; the precise relation between all dataset variants should be reviewed before treating their results as strictly comparable.
-
-## Train and evaluate
-
-From the repository root:
+## Quick start
 
 ```bash
-python main.py        # Optuna search, final training, saves model.pt
-python testing.py     # loads model.pt and scaler_v1_features.pkl, evaluates raw/test.xlsx
+git clone https://github.com/<your-account>/dvc.git && cd dvc
+
+# 1. put rating.csv next to anime.csv and build the features
+python ML.py                       # writes X_cleaned.csv and Y_cleaned.csv
+
+# 2. train a model (each script reads its table, runs Optuna, saves a .pkl)
+python tree.py
+python catboost_learning.py
+python xgboost_learning.py
+python neural_network.py
+python linear_regression.py
+
+# 3. compare all five
+python final_comparison.py
 ```
 
-**Note:** `main.py` reads the preprocessed augmented dataset directly, whereas `testing.py` applies the saved scaler to the raw test set. Verify that the training and inference feature transformations are consistent before using metrics or deploying the checkpoint.
+The training scripts read the final feature table under the names used in the code (`df_final_for_lr.csv`,
+`df_final_for_lr_cleaned.csv`, `df.csv`). No script in the repository writes `df_final_for_lr.csv` from
+`X_cleaned.csv` / `Y_cleaned.csv` (the target column is called `rating_y`), so assemble it yourself, or change the file
+names at the top of a script.
 
-## Experiments and illustrations
+### Reproducing the DVC stage
 
-| Script | Comparison | Saved plot |
-|---|---|---|
-| `activation_analysis.py` | Activation functions | [`activation_analysis.png`](activation_analysis.png) |
-| `epochs_analysis.py` | Training epochs | [`epochs_analysis.png`](epochs_analysis.png) |
-| `layers_analysis.py` | Network depth | [`layers_analysis.png`](layers_analysis.png) |
-| `neurons_analysis.py` | Neurons per layer | [`neurons_analysis.png`](neurons_analysis.png) |
-| `optimizer_analysis.py` | Optimizers | [`optimizer_analysis.png`](optimizer_analysis.png) |
-| `random_state_analysis.py` | Random initialization/split | [`random_state_analysis.png`](random_state_analysis.png) |
+```bash
+dvc repro                          # runs: python catboost_learning.py df.csv catboost_optuna.pkl
+dvc dag
+```
 
-Each analysis script is a separate experiment and can be invoked from the repository root after installing the dependencies, for example `python activation_analysis.py`.
+> The DVC remote in `.dvc/config` points to a local disk (`E:/dvc_storage`). To pull the data on another machine, add
+> your own remote first: `dvc remote add -d storage <path-or-url>` and `dvc push` / `dvc pull`.
 
 ## Repository layout
 
-```text
-main.py                         training and Optuna optimization
-testing.py                      checkpoint evaluation
-preparation_dataset.ipynb       data-preparation notebook
-train.ipynb, test.ipynb         exploratory training / testing notebooks
-*_analysis.py                   architecture / training sensitivity studies
-*_experiment.py                 data imbalance / preprocessing studies
-raw/                            original Excel inputs
-train_*.xlsx                    prepared and experimental datasets
-model.pt, scaler_v1_features.pkl saved artifacts
-*.png                           published experiment figures
+```
+ML.py                         feature pipeline: ratings + anime → X, Y
+linear_regression.py          linear model (+ Optuna), linear_regression_testing.py
+tree.py, tree_testing.py      decision tree (Optuna, MAE)
+catboost_learning.py          CatBoost (Optuna)           ← DVC stage train_tree
+xgboost_learning.py           XGBoost (Optuna)
+neural_network.py             MLPRegressor (Optuna, searched layers)
+final_comparison.py           MSE / MAE / R² for all models, comparison plots
+corellation_matrix.py         correlation matrix of the table
+new_csv.py                    cleaning of df_final_for_lr.csv → df_final_for_lr_cleaned.csv
+dvc.yaml, dvc.lock            pipeline
+df_final_for_lr_cleaned.csv.dvc   tracked table
+*.pkl                         trained models and the scaler
+*.png, *.csv, *.txt           plots, importances, weights
 ```
 
-## Scope and limitations
+## Notes
 
-- The label is constructed from `Type`, not an externally verified semantic description of all physical surfaces.
-- Hyperparameter tuning and final evaluation reuse a split of `train_augmented.xlsx` in `main.py`; report independent-test results separately.
-- A saved model is present, but the code does not define a general inference package or a deployed ROS node.
-- No top-level licence file was included in the supplied archive.
+* `rating_y` is a property of the title, while the table has one row per user rating, so the same title appears many
+  times with identical features. A random train/test split therefore puts copies of a title on both sides; for a strict
+  estimate split by `anime_id`.
+* Feature importance is computed on the fitted models and is not a causal statement about what makes an anime popular.

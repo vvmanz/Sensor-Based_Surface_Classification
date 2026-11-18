@@ -1,86 +1,104 @@
-# lb2_kurenko — классификация поверхностей по данным датчиков
+# Классификация поверхности по проприоцептивным данным
 
-**Бинарная классификация типа поверхности по измерениям робота с помощью PyTorch, Optuna и сравнительных экспериментов.**
+**Предсказание среднего рейтинга аниме по жанрам, типу, числу серий и популярности: пять регрессионных моделей на многогигабайтной таблице, данные и обучение версионируются через DVC.**
 
 [English](README.md) | Русский
 
-Проект исследует возможность различать класс поверхности по измерениям датчиков робота с помощью нейронной сети. Целевая метка формируется из столбца `Type`: **класс 1 — `Type == 2`**, **класс 0 — остальные типы**. В репозитории есть обучение и тестирование, сохранённая модель, нормализатор, Excel-таблицы и графики влияния разных параметров.
+![важность признаков CatBoost](docs/catboost_importance.png)
 
-![Сравнение функций активации](activation_analysis.png)
+Учебный проект по табличной регрессии и версионированию данных. Пользовательские оценки (`rating.csv`) объединяются с
+каталогом аниме (`anime.csv`: `anime_id, name, genre, type, episodes, rating, members`), жанры кодируются one-hot,
+добавляется длина названия, целевая переменная — средний рейтинг тайтла (`rating_y`). Линейная регрессия, решающее
+дерево, CatBoost, XGBoost и MLP подбираются Optuna, сохраняются в `.pkl` и сравниваются на одной таблице по MSE, MAE и
+R². Большая таблица и стадия обучения CatBoost отслеживаются DVC, так что модель можно воспроизвести из коммита.
 
 ## Возможности
 
-- **Бинарный классификатор на PyTorch:** MLP со слоями `nn.Linear`, функциями активации и dropout.
-- **15 признаков датчиков:** токи `I1`–`I3`, гироскоп `gx`–`gz`, акселерометр `ax`–`az`, напряжения `V1real`–`V3real`, параметры `N1`–`N3`.
-- **Подбор Optuna:** ширина и глубина сети, скорость обучения, batch size, dropout и активация.
-- **Работа с дисбалансом классов:** взвешенная cross-entropy и отдельные исследования балансировки.
-- **Оценка классификатора:** F1, accuracy, матрица ошибок, classification report, ROC/AUC в `testing.py`.
-- **Сравнительные эксперименты:** функции активации, число эпох, оптимизаторы, слои, нейроны, random state, нормализация и балансировка.
+* **Подготовка признаков** (`ML.py`): объединение оценок и каталога, мультиметочное one-hot кодирование жанров
+  (`MultiLabelBinarizer`), dummy-признаки типа тайтла, число слов в названии, `episodes` и `members`.
+* **Пять моделей**, у каждой свой скрипт с поиском по Optuna: `linear_regression.py`, `tree.py` (50 испытаний,
+  глубина 3–6), `catboost_learning.py`, `xgboost_learning.py`, `neural_network.py` (`MLPRegressor` с подбором
+  архитектуры).
+* **Сравнение бок о бок** (`final_comparison.py`): загружает пять сохранённых моделей, печатает MSE / MAE / R², строит
+  графики «предсказание — истина», веса линейной модели, первые узлы дерева и важности признаков.
+* **Артефакты для интерпретации**: `catboost_feature_importance.csv`, `xgboost_feature_importance.png`,
+  `linear_regression_results.txt` (веса по признакам), графики весов и смещений MLP по слоям.
+* **DVC**: стадия `train_tree` в `dvc.yaml` (запуск CatBoost: `df.csv` + `catboost_learning.py` →
+  `catboost_optuna.pkl`) с lock-файлом и `df_final_for_lr_cleaned.csv.dvc` для очищенной таблицы ≈ 3,8 ГБ.
+
+В модели CatBoost самые сильные признаки — `members` и `episodes` (важность ≈ 41 и ≈ 15), дальше отдельные жанры
+(Drama, Ecchi, Shounen) и тип TV; рисунок выше построен по `catboost_feature_importance.csv`. Остальные графики
+(предсказание против истины, гистограмма ошибок, веса линейной модели, слои MLP) создаются `final_comparison.py` и
+скриптами обучения и лежат в корне репозитория.
 
 ## Требования
 
-Рекомендуется Python 3.10+; нужны `torch`, `numpy`, `pandas`, `scikit-learn`, `matplotlib`, `optuna`, `joblib`, `openpyxl`, `imbalanced-learn` (последняя библиотека импортируется в экспериментальных скриптах).
+* Python ≥ 3.10;
+* pandas, numpy, scikit-learn, CatBoost, XGBoost, Optuna, joblib, matplotlib, seaborn;
+* [DVC](https://dvc.org), если нужно подтянуть или воспроизвести отслеживаемые данные и стадию;
+* исходные таблицы: `anime.csv` есть в репозитории, `rating.csv` (пользовательские оценки того же открытого датасета
+  аниме) — нет, как и производных `df*.csv` (от сотен МБ до нескольких ГБ).
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install torch numpy pandas scikit-learn matplotlib optuna joblib openpyxl imbalanced-learn
+pip install pandas numpy scikit-learn catboost xgboost optuna joblib matplotlib seaborn "dvc"
 ```
 
-## Данные
-
-| Файл | Назначение |
-|---|---|
-| `raw/train.xlsx`, `raw/test.xlsx` | Исходные табличные обучающие и тестовые данные |
-| `train_augmented.xlsx` | Подготовленная выборка для `main.py` |
-| `train_imbalanced.xlsx`, `train_unnormalized.xlsx`, `train_unsorted.xlsx` | Варианты для отдельных экспериментов |
-| `scaler_v1_features.pkl` | Сохранённый нормализатор для `testing.py` |
-| `model.pt` | Сохранённые параметры нейросети |
-
-`main.py` загружает `train_augmented.xlsx`. Подготовка данных дополнительно отражена в `preparation_dataset.ipynb`. Перед строгим сравнением результатов важно проверить, как формировались отдельные варианты датасета.
-
-## Обучение и проверка
-
-Из корня проекта:
+## Быстрый старт
 
 ```bash
-python main.py        # Optuna, обучение итоговой модели, model.pt
-python testing.py     # загрузка model.pt и scaler_v1_features.pkl, тест raw/test.xlsx
+git clone https://github.com/<your-account>/dvc.git && cd dvc
+
+# 1. положите rating.csv рядом с anime.csv и постройте признаки
+python ML.py                       # пишет X_cleaned.csv и Y_cleaned.csv
+
+# 2. обучите модель (каждый скрипт читает свою таблицу, запускает Optuna и сохраняет .pkl)
+python tree.py
+python catboost_learning.py
+python xgboost_learning.py
+python neural_network.py
+python linear_regression.py
+
+# 3. сравните все пять
+python final_comparison.py
 ```
 
-**Замечание:** `main.py` напрямую использует подготовленный датасет, тогда как `testing.py` нормализует сырой тестовый набор сохранённым scaler. Перед интерпретацией метрик и переносом модели проверьте согласованность преобразований на обучении и инференсе.
+Скрипты обучения читают итоговую таблицу признаков под именами из кода (`df_final_for_lr.csv`,
+`df_final_for_lr_cleaned.csv`, `df.csv`). Ни один скрипт в репозитории не собирает `df_final_for_lr.csv` из
+`X_cleaned.csv` / `Y_cleaned.csv` (целевой столбец называется `rating_y`), поэтому соберите её сами или поменяйте имена
+файлов в начале скрипта.
 
-## Эксперименты и графики
+### Воспроизведение стадии DVC
 
-| Скрипт | Исследование | Результат |
-|---|---|---|
-| `activation_analysis.py` | Функции активации | [`activation_analysis.png`](activation_analysis.png) |
-| `epochs_analysis.py` | Число эпох | [`epochs_analysis.png`](epochs_analysis.png) |
-| `layers_analysis.py` | Глубина сети | [`layers_analysis.png`](layers_analysis.png) |
-| `neurons_analysis.py` | Число нейронов | [`neurons_analysis.png`](neurons_analysis.png) |
-| `optimizer_analysis.py` | Оптимизаторы | [`optimizer_analysis.png`](optimizer_analysis.png) |
-| `random_state_analysis.py` | Инициализация / разбиение | [`random_state_analysis.png`](random_state_analysis.png) |
+```bash
+dvc repro                          # выполнит: python catboost_learning.py df.csv catboost_optuna.pkl
+dvc dag
+```
 
-Скрипты запускаются отдельно после установки зависимостей, например `python activation_analysis.py` из корня проекта.
+> Remote DVC в `.dvc/config` указывает на локальный диск (`E:/dvc_storage`). Чтобы получить данные на другой машине,
+> сначала добавьте свой remote: `dvc remote add -d storage <путь-или-url>`, затем `dvc push` / `dvc pull`.
 
 ## Структура репозитория
 
-```text
-main.py                         обучение и подбор Optuna
-testing.py                      проверка сохранённой модели
-preparation_dataset.ipynb       подготовка данных
-train.ipynb, test.ipynb         исследовательские ноутбуки
-*_analysis.py                   изучение параметров сети и обучения
-*_experiment.py                 эксперименты с данными
-raw/                            исходные Excel-файлы
-train_*.xlsx                    подготовленные датасеты
-model.pt, scaler_v1_features.pkl сохранённые артефакты
-*.png                           графики экспериментов
+```
+ML.py                         подготовка признаков: оценки + аниме → X, Y
+linear_regression.py          линейная модель (+ Optuna), linear_regression_testing.py
+tree.py, tree_testing.py      решающее дерево (Optuna, MAE)
+catboost_learning.py          CatBoost (Optuna)           ← стадия DVC train_tree
+xgboost_learning.py           XGBoost (Optuna)
+neural_network.py             MLPRegressor (Optuna, подбор слоёв)
+final_comparison.py           MSE / MAE / R² для всех моделей, графики сравнения
+corellation_matrix.py         корреляционная матрица таблицы
+new_csv.py                    очистка df_final_for_lr.csv → df_final_for_lr_cleaned.csv
+dvc.yaml, dvc.lock            пайплайн
+df_final_for_lr_cleaned.csv.dvc   отслеживаемая таблица
+*.pkl                         обученные модели и скейлер
+*.png, *.csv, *.txt           графики, важности, веса
 ```
 
-## Статус и ограничения
+## Замечания
 
-- Метка получена из численного `Type`; детальная физическая интерпретация всех типов поверхности в архиве не документирована.
-- Во время Optuna и итоговой оценки `main.py` использует одно разбиение `train_augmented.xlsx`. Качество на независимом тестовом наборе лучше сообщать отдельно.
-- Есть сохранённая модель, но нет универсального пакета инференса или готового ROS-узла.
-- В переданном архиве нет файла с лицензией проекта.
+* `rating_y` — свойство тайтла, а в таблице одна строка на каждую пользовательскую оценку, поэтому один и тот же тайтл
+  встречается много раз с одинаковыми признаками. Случайное разбиение train/test кладёт копии тайтла по обе стороны;
+  для строгой оценки разбивайте по `anime_id`.
+* Важность признаков считается по обученным моделям и не является причинным утверждением о том, что делает аниме
+  популярным.
